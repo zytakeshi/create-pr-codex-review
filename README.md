@@ -1,5 +1,9 @@
 # create-pr-codex-review
 
+**[English](README.md)** | [日本語](README.ja.md) | [中文](README.zh.md)
+
+---
+
 A Claude Code skill that automates the full pull request lifecycle with **OpenAI Codex** as your AI code reviewer.
 
 One command: commit, push, create PR, wait for Codex review, fix issues, merge.
@@ -56,7 +60,7 @@ In Claude Code:
   │                        │  found comments!     │<───────────────────│
   │                        │<─────────────────────│                    │
   │                        │                      │                    │
-  │  "Codex found 2       │  read → fix → push  │                    │
+  │  "Codex found 2        │  read → fix → push  │                    │
   │   issues, fixed"       │─────────────────────>│                    │
   │<───────────────────────│                      │   re-review        │
   │                        │  poll again...       │───────────────────>│
