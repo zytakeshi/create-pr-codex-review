@@ -12,23 +12,13 @@ You are automating the full pull request lifecycle. Follow each phase in order.
 
 $ARGUMENTS
 
-## Phase 0: Ownership Check
-
-Before doing anything, verify this repo is owned by the user:
-
-```bash
-git remote -v
-```
-
-Extract the `{owner}` from the remote URL. Ask the user to confirm this is their repo if you haven't worked with it before. Do NOT proceed with any git operations on repos the user doesn't own.
-
 ## Phase 1: Prepare the Commit
 
 1. Run these in parallel:
    - `git status` (never use `-uall`)
    - `git diff` and `git diff --staged` to see all changes
    - `git log --oneline -5` for commit message style
-   - `git remote -v` to verify the remote
+   - `git remote -v` to identify the remote {owner}/{repo}
 
 2. Analyze all changes and draft a commit message:
    - Summarize the nature (feature, fix, refactor, etc.)

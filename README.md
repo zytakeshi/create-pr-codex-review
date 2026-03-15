@@ -77,12 +77,6 @@ In Claude Code:
 
 ```
   ┌─────────────────────────────┐
-  │  Phase 0: Safety Check      │
-  │  Verify repo ownership      │
-  └──────────────┬──────────────┘
-                 │
-                 v
-  ┌─────────────────────────────┐
   │  Phase 1: Prepare Commit    │
   │  - git status / diff        │
   │  - analyze changes          │
