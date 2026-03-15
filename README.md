@@ -38,104 +38,76 @@ In Claude Code:
 
 ## How It Works
 
-```
-  You                  Claude Code              GitHub               Codex
-  │                        │                      │                    │
-  │  /create-pr            │                      │                    │
-  │───────────────────────>│                      │                    │
-  │                        │  git commit + push   │                    │
-  │                        │─────────────────────>│                    │
-  │                        │  gh pr create        │                    │
-  │                        │─────────────────────>│                    │
-  │                        │                      │  webhook           │
-  │  "PR created,          │                      │───────────────────>│
-  │   waiting review..."   │                      │                    │
-  │<───────────────────────│                      │                    │
-  │                        │                      │   Codex reviews    │
-  │  (you keep working)    │  poll comments...    │   your code        │
-  │                        │─────────────────────>│                    │
-  │                        │  (nothing yet)       │                    │
-  │                        │─────────────────────>│                    │
-  │                        │                      │  review comments   │
-  │                        │  found comments!     │<───────────────────│
-  │                        │<─────────────────────│                    │
-  │                        │                      │                    │
-  │  "Codex found 2        │  read → fix → push  │                    │
-  │   issues, fixed"       │─────────────────────>│                    │
-  │<───────────────────────│                      │   re-review        │
-  │                        │  poll again...       │───────────────────>│
-  │                        │─────────────────────>│                    │
-  │                        │  no new comments     │  all clear         │
-  │                        │<─────────────────────│<───────────────────│
-  │                        │                      │                    │
-  │  "All clear. Merge?"   │                      │                    │
-  │<───────────────────────│                      │                    │
-  │  "y"                   │                      │                    │
-  │───────────────────────>│  gh pr merge         │                    │
-  │                        │─────────────────────>│                    │
-  │  "Merged!"             │                      │                    │
-  │<───────────────────────│                      │                    │
+```mermaid
+sequenceDiagram
+    actor You
+    participant Claude as Claude Code
+    participant GH as GitHub
+    participant Codex as Codex
+
+    You->>Claude: /create-pr
+    Claude->>GH: git commit + push
+    Claude->>GH: gh pr create
+    GH->>Codex: webhook trigger
+    Claude-->>You: "PR created, waiting review..."
+
+    Note over You: You keep working
+
+    loop Poll every 60s (up to 20 min)
+        Claude->>GH: check comments & reviews
+    end
+
+    Codex->>GH: review comments
+    GH->>Claude: comments found!
+    Claude->>Claude: read code → fix issues
+    Claude-->>You: "Codex found 2 issues, fixed"
+    Claude->>GH: push fixes
+
+    GH->>Codex: re-review
+    Codex->>GH: all clear
+    GH->>Claude: no new comments
+
+    Claude-->>You: "All clear. Merge?"
+    You->>Claude: y
+    Claude->>GH: gh pr merge --squash
+    Claude-->>You: "Merged!"
 ```
 
 ### Phase-by-Phase Flow
 
-```
-  ┌─────────────────────────────┐
-  │  Phase 1: Prepare Commit    │
-  │  - git status / diff        │
-  │  - analyze changes          │
-  │  - generate commit message  │
-  │  - git add + commit         │
-  └──────────────┬──────────────┘
-                 │
-                 v
-  ┌─────────────────────────────┐
-  │  Phase 2: Push + Create PR  │
-  │  - git push -u origin       │
-  │  - gh pr create             │
-  │  - generate title + body    │
-  └──────────────┬──────────────┘
-                 │
-                 v
-  ┌─────────────────────────────┐
-  │  Phase 3: Wait for Review   │
-  │  (background, non-blocking) │
-  │                             │
-  │  Poll every 60s:            │
-  │  - PR inline comments       │
-  │  - PR reviews               │
-  │  - CI check runs            │
-  │                             │
-  │  Timeout: 20 minutes        │
-  └──────────────┬──────────────┘
-                 │
-                 v
-  ┌─────────────────────────────┐
-  │  Phase 4: Assess + Fix      │
-  │                             │
-  │  For each comment:          │
-  │  ┌─────────┐               │
-  │  │ Agree?  │               │
-  │  └────┬────┘               │
-  │   yes │  no                │
-  │   v   v                    │
-  │  fix  skip (explain why)   │
-  │                             │
-  │  Then: lint + commit + push │
-  └──────────────┬──────────────┘
-                 │
-                 v
-          ┌──────────────┐
-          │ New comments? │──yes──> back to Phase 3
-          └──────┬───────┘
-                 │ no
-                 v
-  ┌─────────────────────────────┐
-  │  Phase 5: Merge             │
-  │  - confirm with user        │
-  │  - gh pr merge --squash     │
-  │  - verify merge status      │
-  └─────────────────────────────┘
+```mermaid
+flowchart TD
+    A["Phase 1: Prepare Commit
+    git status / diff
+    analyze changes
+    generate commit message
+    git add + commit"] --> B
+
+    B["Phase 2: Push + Create PR
+    git push -u origin
+    gh pr create
+    generate title + body"] --> C
+
+    C["Phase 3: Wait for Review
+    ⏳ background, non-blocking
+    Poll every 60s:
+    • inline comments
+    • PR reviews
+    • CI check runs
+    Timeout: 20 min"] --> D
+
+    D["Phase 4: Assess + Fix"] --> E{Agree with comment?}
+    E -->|Yes| F[Fix the code]
+    E -->|No| G[Skip — explain why]
+    F --> H[lint + commit + push]
+    G --> H
+
+    H --> I{New comments?}
+    I -->|Yes| C
+    I -->|No| J["Phase 5: Merge
+    confirm with user
+    gh pr merge --squash
+    verify merge status"]
 ```
 
 ## Enable Codex Review
@@ -156,9 +128,6 @@ Once enabled, Codex posts a standard GitHub code review with inline comments whe
 > Requires ChatGPT Plus, Pro, Team, or Enterprise.
 
 ## FAQ
-
-**Q: Does it work without Codex?**
-A: Yes. Without Codex comments, it waits 20 minutes then asks if you want to merge directly.
 
 **Q: What repos are supported?**
 A: Any GitHub repo you have push access to.

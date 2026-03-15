@@ -38,105 +38,76 @@ npx skills add zytakeshi/create-pr-codex-review -g
 
 ## 工作原理
 
-```
-  你                   Claude Code              GitHub               Codex
-  │                        │                      │                    │
-  │  /create-pr            │                      │                    │
-  │───────────────────────>│                      │                    │
-  │                        │  git commit + push   │                    │
-  │                        │─────────────────────>│                    │
-  │                        │  gh pr create        │                    │
-  │                        │─────────────────────>│                    │
-  │                        │                      │  webhook 触发      │
-  │  「PR 已创建，         │                      │───────────────────>│
-  │   等待审查中...」      │                      │                    │
-  │<───────────────────────│                      │                    │
-  │                        │                      │   Codex 审查       │
-  │  (你可以继续工作)      │  轮询评论中...       │   你的代码         │
-  │                        │─────────────────────>│                    │
-  │                        │  (暂无评论)          │                    │
-  │                        │─────────────────────>│                    │
-  │                        │                      │  审查评论           │
-  │                        │  发现评论！          │<───────────────────│
-  │                        │<─────────────────────│                    │
-  │                        │                      │                    │
-  │  「Codex 提了 2 条     │  阅读→修复→push     │                    │
-  │   建议，已修复」       │─────────────────────>│                    │
-  │<───────────────────────│                      │   再次审查          │
-  │                        │  继续轮询...         │───────────────────>│
-  │                        │─────────────────────>│                    │
-  │                        │  无新评论            │  全部通过           │
-  │                        │<─────────────────────│<───────────────────│
-  │                        │                      │                    │
-  │  「全部通过，          │                      │                    │
-  │   是否合并？」         │                      │                    │
-  │<───────────────────────│                      │                    │
-  │  "y"                   │                      │                    │
-  │───────────────────────>│  gh pr merge         │                    │
-  │                        │─────────────────────>│                    │
-  │  「已合并！」          │                      │                    │
-  │<───────────────────────│                      │                    │
+```mermaid
+sequenceDiagram
+    actor You as 你
+    participant Claude as Claude Code
+    participant GH as GitHub
+    participant Codex as Codex
+
+    You->>Claude: /create-pr
+    Claude->>GH: git commit + push
+    Claude->>GH: gh pr create
+    GH->>Codex: webhook 触发
+    Claude-->>You: 「PR 已创建，等待审查中...」
+
+    Note over You: 你可以继续工作
+
+    loop 每 60 秒轮询（最多 20 分钟）
+        Claude->>GH: 检查评论和审查
+    end
+
+    Codex->>GH: 审查评论
+    GH->>Claude: 发现评论！
+    Claude->>Claude: 阅读代码 → 修复问题
+    Claude-->>You: 「Codex 提了 2 条建议，已修复」
+    Claude->>GH: push 修复
+
+    GH->>Codex: 再次审查
+    Codex->>GH: 全部通过
+    GH->>Claude: 无新评论
+
+    Claude-->>You: 「全部通过，是否合并？」
+    You->>Claude: y
+    Claude->>GH: gh pr merge --squash
+    Claude-->>You: 「已合并！」
 ```
 
 ### 分阶段流程
 
-```
-  ┌──────────────────────────────┐
-  │  Phase 1: 准备提交           │
-  │  - git status / diff         │
-  │  - 分析改动内容              │
-  │  - 生成 commit message       │
-  │  - git add + commit          │
-  └──────────────┬───────────────┘
-                 │
-                 v
-  ┌──────────────────────────────┐
-  │  Phase 2: 推送 + 创建 PR     │
-  │  - git push -u origin        │
-  │  - gh pr create              │
-  │  - 生成标题 + 描述           │
-  └──────────────┬───────────────┘
-                 │
-                 v
-  ┌──────────────────────────────┐
-  │  Phase 3: 等待审查           │
-  │  (后台运行，不阻塞你)        │
-  │                              │
-  │  每 60 秒轮询：              │
-  │  - PR 行内评论               │
-  │  - PR 审查意见               │
-  │  - CI 检查结果               │
-  │                              │
-  │  超时：20 分钟               │
-  └──────────────┬───────────────┘
-                 │
-                 v
-  ┌──────────────────────────────┐
-  │  Phase 4: 评估 + 修复        │
-  │                              │
-  │  对每条评论：                │
-  │  ┌──────────┐               │
-  │  │ 同意？   │               │
-  │  └────┬─────┘               │
-  │   是  │  否                  │
-  │   v   v                     │
-  │  修复  跳过（告知原因）      │
-  │                              │
-  │  完成后：lint + commit + push│
-  └──────────────┬───────────────┘
-                 │
-                 v
-          ┌───────────────┐
-          │ 有新评论？     │──是──> 回到 Phase 3
-          └──────┬────────┘
-                 │ 没有
-                 v
-  ┌──────────────────────────────┐
-  │  Phase 5: 合并               │
-  │  - 向你确认                  │
-  │  - gh pr merge --squash      │
-  │  - 验证合并状态              │
-  └──────────────────────────────┘
+```mermaid
+flowchart TD
+    A["Phase 1: 准备提交
+    git status / diff
+    分析改动内容
+    生成 commit message
+    git add + commit"] --> B
+
+    B["Phase 2: 推送 + 创建 PR
+    git push -u origin
+    gh pr create
+    生成标题 + 描述"] --> C
+
+    C["Phase 3: 等待审查
+    ⏳ 后台运行，不阻塞你
+    每 60 秒轮询:
+    • 行内评论
+    • PR 审查意见
+    • CI 检查结果
+    超时: 20 分钟"] --> D
+
+    D["Phase 4: 评估 + 修复"] --> E{同意评论？}
+    E -->|是| F[修复代码]
+    E -->|否| G[跳过 — 告知原因]
+    F --> H[lint + commit + push]
+    G --> H
+
+    H --> I{有新评论？}
+    I -->|是| C
+    I -->|没有| J["Phase 5: 合并
+    向你确认
+    gh pr merge --squash
+    验证合并状态"]
 ```
 
 ## 启用 Codex 审查
@@ -157,9 +128,6 @@ npx skills add zytakeshi/create-pr-codex-review -g
 > 需要 ChatGPT Plus、Pro、Team 或 Enterprise 订阅。
 
 ## 常见问题
-
-**Q: 没有 Codex 也能用吗？**
-A: 可以。没有 Codex 评论的话，20 分钟后会询问你是否直接合并。
 
 **Q: 支持哪些仓库？**
 A: 任何你有 push 权限的 GitHub 仓库。
