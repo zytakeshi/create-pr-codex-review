@@ -141,19 +141,18 @@ Claude Code で入力:
 
 ## Codex レビューの有効化
 
-1. [chatgpt.com/codex](https://chatgpt.com/codex) を開く
-2. 左下の **Settings**（設定）をクリック
-3. **GitHub** セクションで GitHub アカウントを接続
-4. **Configure repositories** で対象リポジトリを選択
-5. **Settings → General** で以下を有効化:
-   - **Auto-review pull requests**（PRの自動レビュー）
-   - トリガー: _Open a pull request for review_（PR作成時）
-6. 保存
+1. [chatgpt.com/codex](https://chatgpt.com/codex) を開き、GitHub アカウントを接続
+2. [chatgpt.com/codex/settings/code-review](https://chatgpt.com/codex/settings/code-review) を開く
+3. 対象リポジトリの **Code review** をオンにする
+4. **Automatic reviews** をオンにすると、新しい PR ごとに自動レビューされる
 
-有効化後、PRを作成するたびに Codex がインラインコメントで自動レビューします。
+有効化後、PR が作成されるたびに Codex がインラインコメントで自動レビューします。
 
-**手動トリガー:** PRコメントに `@codex review` と入力
-**Codexに修正させる:** PRコメントに `@codex address that feedback` と入力
+**手動トリガー:** PR コメントに `@codex review` と入力
+**重点レビュー:** PR コメントに `@codex review for security regressions` と入力
+**Codex に修正させる:** PR コメントに `@codex address that feedback` と入力
+
+**ヒント:** リポジトリのルートに `AGENTS.md` を追加して、レビュー基準をカスタマイズできます。
 
 > ChatGPT Plus、Pro、Team、Enterprise のいずれかが必要です。
 

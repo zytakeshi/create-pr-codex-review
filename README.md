@@ -140,19 +140,18 @@ In Claude Code:
 
 ## Enable Codex Review
 
-1. Go to [chatgpt.com/codex](https://chatgpt.com/codex)
-2. Click **Settings** (bottom-left)
-3. Under **GitHub**, connect your GitHub account
-4. Click **Configure repositories** and select your repos
-5. In **Settings → General**, enable:
-   - **Auto-review pull requests**
-   - Trigger on: _Open a pull request for review_
-6. Save
+1. Go to [chatgpt.com/codex](https://chatgpt.com/codex) and connect your GitHub account
+2. Open [chatgpt.com/codex/settings/code-review](https://chatgpt.com/codex/settings/code-review)
+3. Toggle on **Code review** for your repository
+4. Toggle on **Automatic reviews** to review every new PR automatically
 
-Once enabled, Codex automatically reviews every PR with inline comments.
+Once enabled, Codex posts a standard GitHub code review with inline comments whenever a PR is opened.
 
 **Manual trigger:** Comment `@codex review` on any PR
+**Focused review:** Comment `@codex review for security regressions`
 **Let Codex fix:** Comment `@codex address that feedback`
+
+**Tip:** Add review guidelines to `AGENTS.md` at your repo root to customize what Codex looks for.
 
 > Requires ChatGPT Plus, Pro, Team, or Enterprise.
 

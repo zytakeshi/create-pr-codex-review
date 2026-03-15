@@ -141,19 +141,18 @@ npx skills add zytakeshi/create-pr-codex-review -g
 
 ## 启用 Codex 审查
 
-1. 打开 [chatgpt.com/codex](https://chatgpt.com/codex)
-2. 点击左下角 **Settings**（设置）
-3. 在 **GitHub** 部分连接你的 GitHub 账号
-4. 点击 **Configure repositories**，选择要启用的仓库
-5. 在 **Settings → General** 中开启：
-   - **Auto-review pull requests**（自动审查 PR）
-   - 触发条件：_Open a pull request for review_（PR 创建时）
-6. 保存
+1. 打开 [chatgpt.com/codex](https://chatgpt.com/codex)，连接你的 GitHub 账号
+2. 打开 [chatgpt.com/codex/settings/code-review](https://chatgpt.com/codex/settings/code-review)
+3. 为目标仓库开启 **Code review**
+4. 开启 **Automatic reviews**，新 PR 创建时自动触发审查
 
 启用后，每次创建 PR，Codex 会自动以行内评论的形式进行代码审查。
 
 **手动触发：** 在 PR 评论中输入 `@codex review`
+**重点审查：** 在 PR 评论中输入 `@codex review for security regressions`
 **让 Codex 修复：** 在 PR 评论中输入 `@codex address that feedback`
+
+**提示：** 在仓库根目录添加 `AGENTS.md` 文件可以自定义审查标准。
 
 > 需要 ChatGPT Plus、Pro、Team 或 Enterprise 订阅。
 
