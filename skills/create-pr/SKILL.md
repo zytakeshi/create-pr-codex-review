@@ -67,12 +67,14 @@ The polling script checks three sources where Codex results may appear:
 
 ```bash
 # Poll every 60 seconds, up to 20 minutes
+REVIEW_FOUND=false
 for i in $(seq 1 20); do
   COMMENT_COUNT=$(gh api repos/{owner}/{repo}/pulls/{pr_number}/comments --jq 'length' 2>/dev/null || echo "0")
   REVIEW_COUNT=$(gh api repos/{owner}/{repo}/pulls/{pr_number}/reviews --jq '[.[] | select(.state != "PENDING")] | length' 2>/dev/null || echo "0")
-  CHECKS_DONE=$(gh pr checks {pr_number} 2>/dev/null | grep -cE '(pass|fail)' || echo "0")
+  CHECKS_DONE=$(gh pr checks {pr_number} 2>/dev/null | grep -cE '(pass|fail)' || true; echo "${PIPESTATUS[1]:-0}")
   echo "Poll $i: $COMMENT_COUNT comments, $REVIEW_COUNT reviews, $CHECKS_DONE checks completed"
   if [ "$COMMENT_COUNT" != "0" ] || [ "$REVIEW_COUNT" != "0" ] || [ "$CHECKS_DONE" != "0" ]; then
+    REVIEW_FOUND=true
     echo "---COMMENTS---"
     gh api repos/{owner}/{repo}/pulls/{pr_number}/comments --jq '.[] | {path, line, body}' 2>/dev/null
     echo "---REVIEWS---"
@@ -87,6 +89,19 @@ done
 
 Run this with `run_in_background: true` so the user isn't blocked. Tell the user:
 > "PR created: <url>. Monitoring for Codex review comments — I'll notify you when they arrive."
+
+If `REVIEW_FOUND` is still `false` after the loop (all 20 polls completed with no activity):
+- Inform the user: "No Codex review appeared after 20 minutes."
+- Present three options and ask which to take:
+  1. **Recreate the PR** *(recommended)* — close the current PR and open a fresh one with the same title/body to re-trigger the Codex webhook. Use this if Codex was expected to review but didn't fire.
+  2. **Keep waiting** — exit now; the user can re-invoke this skill later to check again.
+  3. **Merge as-is** — skip Codex review and proceed to Phase 5.
+- If the user chooses option 1:
+  - Leave a closing comment: `gh pr comment {pr_number} --body "Closing to re-trigger Codex review. A new PR will be opened from the same branch."`
+  - Close the PR: `gh pr close {pr_number}`
+  - Re-run `gh pr create` using the same branch (already pushed — no new push needed), same title and body.
+  - Capture the new PR number and re-enter Phase 3 polling with it substituted for `{pr_number}`.
+  - **Only offer option 1 once.** If the recreated PR also produces no review after 20 minutes, do not offer to recreate again — instead tell the user: "Codex still didn't review after the second attempt. Please verify that the Codex GitHub app is installed and enabled on this repository." Then present only options 2 or 3.
 
 ## Phase 4: Verify and Fix Review Comments
 
@@ -126,7 +141,7 @@ After pushing fixes:
 - Always use `git remote -v` to verify the correct remote before pushing.
 - Never force-push or amend commits.
 - Never auto-merge without user confirmation unless they explicitly asked for it in the original request.
-- If Codex review has no comments after 20 minutes, tell the user and ask whether to merge or keep waiting.
+- If Codex review has no comments after 20 minutes, follow the no-review handler at the end of Phase 3 (three options: recreate PR, keep waiting, or merge as-is).
 - If the PR has merge conflicts, notify the user rather than resolving automatically.
 - Extract {owner}/{repo} from `git remote -v` output, don't hardcode.
 - Parse the PR number from the `gh pr create` output URL.
