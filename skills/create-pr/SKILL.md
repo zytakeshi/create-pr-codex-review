@@ -85,12 +85,14 @@ CODEX_BOT="chatgpt-codex-connector[bot]"
 HEAD_SHA="{head_sha}"
 REVIEW_MARKER=$(printf 'Reviewed commit: `%s`' "$HEAD_SHA")
 
-echo "Waiting for Codex to review commit $HEAD_SHA"
+# Get the HEAD commit's push time — used to attribute 👍 reactions to this commit.
+# GitHub reactions are PR-scoped (not commit-scoped) and a user can only have one
+# +1 reaction per PR, so delta counting doesn't work. Instead, we check if the
+# reaction's created_at is after the HEAD commit was pushed.
+PUSH_TIME=$(gh api repos/{owner}/{repo}/pulls/{pr_number}/commits \
+  --jq 'last | .commit.committer.date' 2>/dev/null)
 
-BASELINE_REACTIONS=$(gh api repos/{owner}/{repo}/issues/{pr_number}/reactions \
-  --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .content == \"+1\")] | length" \
-  2>/dev/null || echo "0")
-SAW_NEW_REACTION=0
+echo "Waiting for Codex to review commit $HEAD_SHA (pushed at $PUSH_TIME)"
 
 # Initial delay: Codex typically needs 2-5 minutes to process
 sleep 90
@@ -101,25 +103,21 @@ for i in $(seq 1 38); do
     --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .state != \"PENDING\" and ((.body // \"\") | contains(\"$REVIEW_MARKER\")))] | length" \
     2>/dev/null || echo "0")
 
-  # Track new 👍 reactions for diagnostics only.
-  # Reactions are PR-scoped, so never use them as proof that HEAD was reviewed.
-  CODEX_REACTION=$(gh api repos/{owner}/{repo}/issues/{pr_number}/reactions \
-    --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .content == \"+1\")] | length" \
+  # Check for 👍 reaction created AFTER the HEAD commit was pushed.
+  # This attributes PR-scoped reactions to the current commit by timestamp.
+  REACTION_AFTER_PUSH=$(gh api repos/{owner}/{repo}/issues/{pr_number}/reactions \
+    --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .content == \"+1\" and .created_at > \"$PUSH_TIME\")] | length" \
     2>/dev/null || echo "0")
 
-  if [ "$CODEX_REACTION" -gt "$BASELINE_REACTIONS" ]; then
-    SAW_NEW_REACTION=1
-  fi
+  echo "Poll $i/38: reviewed_head=$REVIEWED reaction_after_push=$REACTION_AFTER_PUSH"
 
-  echo "Poll $i/38: reviewed_head=$REVIEWED reactions=$CODEX_REACTION"
-
+  # Review with findings (commit-scoped via SHA in body)
   if [ "$REVIEWED" != "0" ]; then
     echo "CODEX_REVIEW_FOUND"
     echo "---REVIEWS---"
     gh api repos/{owner}/{repo}/pulls/{pr_number}/reviews \
       --jq ".[] | select(.user.login == \"$CODEX_BOT\" and ((.body // \"\") | contains(\"$REVIEW_MARKER\"))) | {state, body}" 2>/dev/null
     echo "---COMMENTS---"
-    # Get comments from this review round (submitted at same time as the matching review)
     REVIEW_TIME=$(gh api repos/{owner}/{repo}/pulls/{pr_number}/reviews \
       --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and ((.body // \"\") | contains(\"$REVIEW_MARKER\")))] | last | .submitted_at" \
       2>/dev/null)
@@ -128,19 +126,23 @@ for i in $(seq 1 38); do
     exit 0
   fi
 
+  # Clean review (no bugs → 👍 reaction created after push)
+  if [ "$REACTION_AFTER_PUSH" != "0" ]; then
+    echo "CODEX_REVIEW_CLEAN"
+    echo "Codex reviewed commit $HEAD_SHA and found no issues (reacted with thumbs up after push)."
+    exit 0
+  fi
+
   sleep 30
 done
-
-if [ "$SAW_NEW_REACTION" -eq 1 ]; then
-  echo "NOTE: Saw a new Codex 👍 reaction after polling started, but reactions are PR-scoped and can't confirm that commit $HEAD_SHA was reviewed."
-fi
 
 echo "CODEX_REVIEW_TIMEOUT"
 ```
 
-Replace `{head_sha}` with the actual short SHA captured before launching. Polls every 30 seconds after a 90-second delay, for up to ~30 minutes. Detects two outcomes:
+Replace `{head_sha}` with the actual short SHA captured before launching. Polls every 30 seconds after a 90-second delay, for up to ~30 minutes. Detects three outcomes:
 - `CODEX_REVIEW_FOUND` — review references HEAD commit, outputs findings
-- `CODEX_REVIEW_TIMEOUT` — no commit-scoped review within the polling window
+- `CODEX_REVIEW_CLEAN` — 👍 reaction created after HEAD was pushed, no bugs
+- `CODEX_REVIEW_TIMEOUT` — no signal within the polling window
 
 Tell the user:
 > "PR created: <url>. Waiting for Codex review — I'll notify you when a commit-scoped result arrives."
@@ -150,7 +152,8 @@ Tell the user:
 When the background task completes, read its output:
 
 - If output contains `CODEX_REVIEW_FOUND`: Parse the `---REVIEWS---` and `---COMMENTS---` sections. Proceed to Phase 4.
-- If output contains `CODEX_REVIEW_TIMEOUT`: Codex did not produce a commit-scoped review signal within the polling window. If the output also includes the `NOTE:` line, tell the user a new Codex 👍 reaction appeared but could not be safely attributed to the current HEAD. Then present options:
+- If output contains `CODEX_REVIEW_CLEAN`: Codex reviewed and found no issues. Tell the user: "Codex reviewed the PR and found no issues." Proceed to Phase 5 (ask to merge).
+- If output contains `CODEX_REVIEW_TIMEOUT`: Codex did not review within the polling window. Present options:
   1. **Recreate the PR** *(recommended if first attempt)* — close and re-open to re-trigger the webhook
   2. **Keep waiting** — user can re-invoke later
   3. **Merge as-is** — skip review, proceed to Phase 5
