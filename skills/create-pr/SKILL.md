@@ -48,8 +48,6 @@ gh pr create --title "<short title under 70 chars>" --body "$(cat <<'EOF'
 
 ## Test plan
 - [ ] <checklist items>
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```
@@ -58,24 +56,31 @@ EOF
 
 ## Phase 3: Monitor for Codex Review
 
+> **Note (March 31, 2026):** Codex Code Review now counts toward regular Codex usage limits instead of having a separate allowance. Heavy usage may cause users to hit their overall Codex limit sooner.
+
 This is the critical automation step. After creating the PR, poll GitHub API for review activity from the Codex bot (`chatgpt-codex-connector[bot]`).
 
 ### How Codex reviews appear on GitHub
 
-When Codex finishes reviewing a PR, it acts as `chatgpt-codex-connector[bot]`. Two possible outcomes may appear on GitHub:
+When Codex picks up a PR for review, it reacts with an **eyes emoji** (👀) on the PR. This is the trigger confirmation signal — it means the webhook fired and Codex is processing the PR.
 
-1. **Issues found**: Posts a PR review (state: `COMMENTED`) + inline comments on specific lines. The review body includes `Reviewed commit: \`<sha>\``.
-2. **No issues found**: May react with 👍 on the PR. That reaction is scoped to the PR, not to a specific commit.
+When Codex finishes reviewing, it acts as `chatgpt-codex-connector[bot]`. Two possible outcomes:
 
-Because only the review body is commit-scoped, the polling script treats **SHA-matched reviews as the only authoritative signal** that the current HEAD has been reviewed. It still snapshots bot 👍 reactions for timeout diagnostics, but it never treats a new reaction as proof that the latest commit was reviewed.
+1. **Issues found**: Posts a PR review (state: `COMMENTED`) + inline comments on specific lines. The review's `commit_id` field matches the reviewed commit SHA.
+2. **No issues found**: May react with a thumbs-up on the PR. That reaction is scoped to the PR, not to a specific commit.
+
+### Polling strategy: two stages
+
+The polling has two stages:
+
+1. **Trigger detection** (fast) — Check for the 👀 eyes reaction OR an already-completed review from Codex (covers the case where Codex finishes before the first poll). If neither is seen after 2 polls, the webhook likely didn't fire — recreate the PR to re-trigger (automatically, but only once).
+2. **Review completion** (longer) — Once triggered, poll for the actual review results (review comments or thumbs-up).
 
 ### Polling script
 
-The script uses **commit-SHA matching**: Codex review bodies contain `Reviewed commit: \`<sha>\``, so we check if the bot has reviewed the HEAD commit specifically. This naturally handles re-reviews after pushing fixes — the script waits for a review that references the latest commit, ignoring reviews of older commits.
-
-Before running the polling script, capture the HEAD commit short SHA:
+Before running the polling script, capture the HEAD commit full SHA:
 ```bash
-HEAD_SHA=$(gh api repos/{owner}/{repo}/pulls/{pr_number} --jq '.head.sha[:10]')
+HEAD_SHA=$(gh api repos/{owner}/{repo}/pulls/{pr_number} --jq '.head.sha')
 ```
 
 Run this with `run_in_background: true` so the user isn't blocked:
@@ -83,86 +88,150 @@ Run this with `run_in_background: true` so the user isn't blocked:
 ```bash
 CODEX_BOT="chatgpt-codex-connector[bot]"
 HEAD_SHA="{head_sha}"
-REVIEW_MARKER=$(printf 'Reviewed commit: `%s`' "$HEAD_SHA")
 
-# Get the HEAD commit's push time — used to attribute 👍 reactions to this commit.
-# GitHub reactions are PR-scoped (not commit-scoped) and a user can only have one
-# +1 reaction per PR, so delta counting doesn't work. Instead, we check if the
-# reaction's created_at is after the HEAD commit was pushed.
+# Get the HEAD commit's push time — used to attribute reactions to this commit.
 PUSH_TIME=$(gh api repos/{owner}/{repo}/pulls/{pr_number}/commits \
   --jq 'last | .commit.committer.date' 2>/dev/null)
 
-echo "Waiting for Codex to review commit $HEAD_SHA (pushed at $PUSH_TIME)"
+echo "Waiting for Codex to pick up PR (looking for eyes reaction or completed review)..."
 
-# Initial delay: Codex typically needs 2-5 minutes to process
-sleep 90
+# --- Stage 1: Trigger detection (eyes emoji OR already-completed review) ---
+# Also check for an existing review in Stage 1, so a fast Codex turnaround
+# (review lands before our first poll) is caught immediately.
+# Initial delay before first check
+sleep 60
 
-for i in $(seq 1 38); do
-  # Check for a review from Codex bot that references this specific commit
-  REVIEWED=$(gh api repos/{owner}/{repo}/pulls/{pr_number}/reviews \
-    --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .state != \"PENDING\" and ((.body // \"\") | contains(\"$REVIEW_MARKER\")))] | length" \
+TRIGGERED=false
+FAST_PATH=false
+for i in $(seq 1 2); do
+  EYES=$(gh api repos/{owner}/{repo}/issues/{pr_number}/reactions \
+    --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .content == \"eyes\")] | length" \
     2>/dev/null || echo "0")
 
-  # Check for 👍 reaction created AFTER the HEAD commit was pushed.
-  # This attributes PR-scoped reactions to the current commit by timestamp.
+  # Also check if a HEAD-scoped review already landed (eyes emoji may already be gone).
+  # Uses commit_id field (full SHA) — reliable regardless of body markdown formatting.
+  EARLY_REVIEW=$(gh api repos/{owner}/{repo}/pulls/{pr_number}/reviews \
+    --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .state != \"PENDING\" and .state != \"DISMISSED\" and .commit_id == \"$HEAD_SHA\")] | length" \
+    2>/dev/null || echo "0")
+
+  echo "Trigger check $i/2: eyes_reaction=$EYES existing_review_head=$EARLY_REVIEW"
+
+  if [ "$EARLY_REVIEW" != "0" ]; then
+    TRIGGERED=true
+    FAST_PATH=true
+    echo "CODEX_TRIGGERED"
+    echo "Codex review already completed for HEAD commit. Skipping to results..."
+    break
+  fi
+
+  if [ "$EYES" != "0" ]; then
+    TRIGGERED=true
+    echo "CODEX_TRIGGERED"
+    echo "Codex picked up the PR (eyes reaction detected). Waiting for review results..."
+    break
+  fi
+
+  [ "$i" -lt 2 ] && sleep 30
+done
+
+if [ "$TRIGGERED" = false ]; then
+  echo "CODEX_NOT_TRIGGERED"
+  exit 0
+fi
+
+# --- Fast path: review already landed during Stage 1 ---
+if [ "$FAST_PATH" = true ]; then
+  echo "CODEX_REVIEW_FOUND"
+  echo "---REVIEWS---"
+  gh api repos/{owner}/{repo}/pulls/{pr_number}/reviews \
+    --jq ".[] | select(.user.login == \"$CODEX_BOT\" and .commit_id == \"$HEAD_SHA\") | {state, body}" 2>/dev/null
+  echo "---COMMENTS---"
+  REVIEW_TIME=$(gh api repos/{owner}/{repo}/pulls/{pr_number}/reviews \
+    --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .commit_id == \"$HEAD_SHA\")] | last | .submitted_at" \
+    2>/dev/null)
+  gh api repos/{owner}/{repo}/pulls/{pr_number}/comments \
+    --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .created_at >= \"$REVIEW_TIME\")] | .[] | {path, line, body}" 2>/dev/null
+  exit 0
+fi
+
+# --- Stage 2: Review completion ---
+# Now wait for the actual review results
+sleep 30
+
+for i in $(seq 1 57); do
+  # Check for a review from Codex bot targeting this specific commit
+  REVIEWED=$(gh api repos/{owner}/{repo}/pulls/{pr_number}/reviews \
+    --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .state != \"PENDING\" and .commit_id == \"$HEAD_SHA\")] | length" \
+    2>/dev/null || echo "0")
+
+  # Check for thumbs-up reaction created AFTER the HEAD commit was pushed.
   REACTION_AFTER_PUSH=$(gh api repos/{owner}/{repo}/issues/{pr_number}/reactions \
     --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .content == \"+1\" and .created_at > \"$PUSH_TIME\")] | length" \
     2>/dev/null || echo "0")
 
-  echo "Poll $i/38: reviewed_head=$REVIEWED reaction_after_push=$REACTION_AFTER_PUSH"
+  echo "Poll $i/57: reviewed_head=$REVIEWED reaction_after_push=$REACTION_AFTER_PUSH"
 
   # Review with findings (commit-scoped via SHA in body)
   if [ "$REVIEWED" != "0" ]; then
     echo "CODEX_REVIEW_FOUND"
     echo "---REVIEWS---"
     gh api repos/{owner}/{repo}/pulls/{pr_number}/reviews \
-      --jq ".[] | select(.user.login == \"$CODEX_BOT\" and ((.body // \"\") | contains(\"$REVIEW_MARKER\"))) | {state, body}" 2>/dev/null
+      --jq ".[] | select(.user.login == \"$CODEX_BOT\" and .commit_id == \"$HEAD_SHA\") | {state, body}" 2>/dev/null
     echo "---COMMENTS---"
     REVIEW_TIME=$(gh api repos/{owner}/{repo}/pulls/{pr_number}/reviews \
-      --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and ((.body // \"\") | contains(\"$REVIEW_MARKER\")))] | last | .submitted_at" \
+      --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .commit_id == \"$HEAD_SHA\")] | last | .submitted_at" \
       2>/dev/null)
     gh api repos/{owner}/{repo}/pulls/{pr_number}/comments \
       --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .created_at >= \"$REVIEW_TIME\")] | .[] | {path, line, body}" 2>/dev/null
     exit 0
   fi
 
-  # Clean review (no bugs → 👍 reaction created after push)
+  # Clean review (no bugs — thumbs-up reaction created after push)
   if [ "$REACTION_AFTER_PUSH" != "0" ]; then
     echo "CODEX_REVIEW_CLEAN"
     echo "Codex reviewed commit $HEAD_SHA and found no issues (reacted with thumbs up after push)."
     exit 0
   fi
 
-  sleep 30
+  [ "$i" -lt 57 ] && sleep 30
 done
 
 echo "CODEX_REVIEW_TIMEOUT"
 ```
 
-Replace `{head_sha}` with the actual short SHA captured before launching. Polls every 30 seconds after a 90-second delay, for up to ~30 minutes. Detects three outcomes:
-- `CODEX_REVIEW_FOUND` — review references HEAD commit, outputs findings
-- `CODEX_REVIEW_CLEAN` — 👍 reaction created after HEAD was pushed, no bugs
-- `CODEX_REVIEW_TIMEOUT` — no signal within the polling window
+Replace `{head_sha}` with the actual full SHA captured before launching. The script has two stages:
+- **Stage 1**: 60s initial delay, then 2 polls (30s apart) for the 👀 eyes reaction OR an already-completed review (via `commit_id`). Exits with `CODEX_NOT_TRIGGERED` if neither is found.
+- **Stage 2**: Once triggered, polls every 30s for up to ~30 minutes for review results.
+
+Detects four outcomes:
+- `CODEX_TRIGGERED` → `CODEX_REVIEW_FOUND` — review references HEAD commit, outputs findings (may also fire via Stage 1 fast-path if review landed before polling started)
+- `CODEX_TRIGGERED` → `CODEX_REVIEW_CLEAN` — thumbs-up after HEAD push, no bugs
+- `CODEX_TRIGGERED` → `CODEX_REVIEW_TIMEOUT` — triggered but no review within the polling window
+- `CODEX_NOT_TRIGGERED` — neither eyes reaction nor HEAD-scoped review found, webhook likely didn't fire
 
 Tell the user:
-> "PR created: <url>. Waiting for Codex review — I'll notify you when a commit-scoped result arrives."
+> "PR created: <url>. Waiting for Codex review — I'll notify you when results arrive."
 
 ### Handling the result
 
 When the background task completes, read its output:
 
-- If output contains `CODEX_REVIEW_FOUND`: Parse the `---REVIEWS---` and `---COMMENTS---` sections. Proceed to Phase 4.
-- If output contains `CODEX_REVIEW_CLEAN`: Codex reviewed and found no issues. Tell the user: "Codex reviewed the PR and found no issues." Proceed to Phase 5 (ask to merge).
-- If output contains `CODEX_REVIEW_TIMEOUT`: Codex did not review within the polling window. Present options:
-  1. **Recreate the PR** *(recommended if first attempt)* — close and re-open to re-trigger the webhook
-  2. **Keep waiting** — user can re-invoke later
-  3. **Merge as-is** — skip review, proceed to Phase 5
-- If user chooses option 1:
-  - `gh pr comment {pr_number} --body "Closing to re-trigger Codex review."`
+- **`CODEX_REVIEW_FOUND`**: Parse the `---REVIEWS---` and `---COMMENTS---` sections. Proceed to Phase 4.
+- **`CODEX_REVIEW_CLEAN`**: Codex reviewed and found no issues. Tell the user: "Codex reviewed the PR and found no issues." Proceed to Phase 5 (ask to merge).
+- **`CODEX_NOT_TRIGGERED`** (first attempt): Codex didn't pick up the PR. Automatically recreate:
+  - `gh pr comment {pr_number} --body "Closing to re-trigger Codex review — eyes reaction not detected."`
   - `gh pr close {pr_number}`
   - Re-run `gh pr create` with same branch/title/body
   - Re-enter Phase 3 with the new PR number
-  - **Only offer recreate once.** On second timeout, present only options 2 or 3.
+  - **This auto-retry happens only once.** If the second PR also gets `CODEX_NOT_TRIGGERED`, ask the user what to do:
+    1. **Keep waiting** — user can re-invoke later
+    2. **Merge as-is** — skip review, proceed to Phase 5
+- **`CODEX_NOT_TRIGGERED`** (second attempt): Do NOT auto-recreate. Ask the user:
+  1. **Keep waiting** — user can re-invoke later
+  2. **Merge as-is** — skip review, proceed to Phase 5
+- **`CODEX_REVIEW_TIMEOUT`**: Codex picked up the PR but didn't finish reviewing. Present options:
+  1. **Keep waiting** — user can re-invoke later
+  2. **Merge as-is** — skip review, proceed to Phase 5
 
 ## Phase 4: Verify and Fix Review Comments
 
