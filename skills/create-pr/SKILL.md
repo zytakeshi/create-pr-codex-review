@@ -62,9 +62,9 @@ This is the critical automation step. After creating the PR, poll GitHub API for
 
 ### How Codex reviews appear on GitHub
 
-When Codex picks up a PR for review, it reacts with an **eyes emoji** (👀) on the PR. This is the trigger confirmation signal — it means the webhook fired and Codex is processing the PR.
+When Codex picks up a PR for review, it reacts with an **eyes emoji** (👀) on the PR. This signals the webhook fired and Codex is actively processing. **The eyes emoji is removed once Codex finishes**, so it is only visible while the review is in progress.
 
-When Codex finishes reviewing, it acts as `chatgpt-codex-connector[bot]`. Two possible outcomes:
+When Codex finishes reviewing, it removes the eyes emoji and acts as `chatgpt-codex-connector[bot]`. Two possible outcomes:
 
 1. **Issues found**: Posts a PR review (state: `COMMENTED`) + inline comments on specific lines. The review's `commit_id` field matches the reviewed commit SHA.
 2. **No issues found**: May react with a thumbs-up on the PR. That reaction is scoped to the PR, not to a specific commit.
@@ -108,7 +108,7 @@ for i in $(seq 1 2); do
     --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .content == \"eyes\")] | length" \
     2>/dev/null || echo "0")
 
-  # Also check if a HEAD-scoped review already landed (eyes emoji may already be gone).
+  # Also check if a HEAD-scoped review already landed (eyes emoji is removed on completion).
   # Uses commit_id field (full SHA) — reliable regardless of body markdown formatting.
   EARLY_REVIEW=$(gh api repos/{owner}/{repo}/pulls/{pr_number}/reviews \
     --jq "[.[] | select(.user.login == \"$CODEX_BOT\" and .state != \"PENDING\" and .state != \"DISMISSED\" and .commit_id == \"$HEAD_SHA\")] | length" \
