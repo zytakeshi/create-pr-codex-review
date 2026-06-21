@@ -53,7 +53,7 @@ sequenceDiagram
 
     Note over You: You keep working
 
-    loop Poll every 60s (up to 20 min)
+    loop Trigger check, then poll every 30s (about 30 min)
         Claude->>GH: check comments & reviews
     end
 
@@ -94,7 +94,7 @@ flowchart TD
     • inline comments
     • PR reviews
     • CI check runs
-    Timeout: 20 min"] --> D
+    Timeout: about 30 min after trigger"] --> D
 
     D["Phase 4: Assess + Fix"] --> E{Agree with comment?}
     E -->|Yes| F[Fix the code]

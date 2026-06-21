@@ -53,7 +53,7 @@ sequenceDiagram
 
     Note over You: 你可以继续工作
 
-    loop 每 60 秒轮询（最多 20 分钟）
+    loop 先检查触发状态，然后每 30 秒轮询（约 30 分钟）
         Claude->>GH: 检查评论和审查
     end
 
@@ -94,7 +94,7 @@ flowchart TD
     • 行内评论
     • PR 审查意见
     • CI 检查结果
-    超时: 20 分钟"] --> D
+    超时: 触发后约 30 分钟"] --> D
 
     D["Phase 4: 评估 + 修复"] --> E{同意评论？}
     E -->|是| F[修复代码]
