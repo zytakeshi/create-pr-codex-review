@@ -122,7 +122,9 @@ Before running the polling script, capture the HEAD commit full SHA:
 HEAD_SHA=$(gh api repos/{owner}/{repo}/pulls/{pr_number} --jq '.head.sha')
 ```
 
-Run this with `run_in_background: true` so the user isn't blocked:
+**Delegate this poll to a Sonnet 5 watchdog sub-agent.** Waiting on the Codex bot is long-running babysitting with an easy-to-verify result — pure execution, so run it on **Sonnet 5** (never Haiku) and keep its polling noise out of your (the caller's) context. Spawn one sub-agent via the `Agent` tool — `model: "sonnet"`, `subagent_type: "general-purpose"` — with a self-contained prompt carrying the polling script below, the `{owner}`/`{repo}`/`{pr_number}` and `HEAD_SHA`, and this contract: *"Run the script with `run_in_background: true`, watch it to completion, and return ONLY the final outcome token (`CODEX_REVIEW_FOUND` / `CODEX_REVIEW_CLEAN` / `CODEX_REVIEW_TIMEOUT` / `CODEX_NOT_TRIGGERED`) plus the raw `---REVIEWS---`/`---COMMENTS---` payload. Do NOT recreate the PR, reply, fix, or merge anything — you only observe and report."* You (the caller) then handle the result + Phase 4: recreating the PR on `CODEX_NOT_TRIGGERED` (re-delegating a fresh watchdog afterward) and verifying/fixing findings are judgment + outward actions that stay on Opus. **Keep the wait bounded.** The watchdog runs **one** poll window (the script's built-in Stage-1/Stage-2 caps — it already exits on its own) and returns the current outcome; it must **not** wait indefinitely behind the `Agent` call. On `CODEX_REVIEW_TIMEOUT` or `CODEX_NOT_TRIGGERED`, *you* (the caller) decide what's next — recreate the PR, re-delegate a fresh watchdog for another window, or ask the user — so user-interruptible, caller-owned decisions (pause / merge / recreate) are never trapped inside a long sub-agent run. If the harness can't spawn agents (or you're already a sub-agent), run the poll inline.
+
+The watchdog (or, in inline mode, you) runs this with `run_in_background: true` so the user isn't blocked:
 
 ```bash
 CODEX_BOT="chatgpt-codex-connector[bot]"
@@ -310,7 +312,14 @@ When comments arrive:
    - **`CODEX_REVIEW_CLEAN`**: Codex is satisfied. Proceed to Phase 5.
    - **`CODEX_REVIEW_TIMEOUT`**: Tell the user Codex timed out on re-review and offer options (keep waiting / merge as-is).
 
-**Safety cap**: After **5 rounds** of fixes without a clean review, stop looping and ask the user how to proceed (keep going, merge as-is, or abandon). This prevents unbounded iteration.
+**No fixed iteration cap.** Keep looping as long as each round produces real fixes that aren't being re-flagged. The loop exits on *convergence*, not a round count:
+
+- **Clean review** — Codex returns `CODEX_REVIEW_CLEAN`. Proceed to Phase 5.
+- **Stable impasse** — every remaining finding is one you already disputed on a prior round with reasoning, and Codex is repeating itself verbatim. Track disputed findings across rounds so you can detect this. Report the impasse and ask the user.
+- **No progress** — a round produced no agreed fixes and no new valid findings (only re-flags of disputed items). Stop and ask.
+- **Diminishing returns** — the only remaining findings are low-value (style, micro-optimization, speculative refactors) and further iteration isn't justified. Say so explicitly in the final report rather than silently deciding, then ask the user.
+
+When you hit a non-clean exit condition, surface it with the round number and the outstanding findings, and ask how to proceed (keep going, merge as-is, or abandon) — but never stop solely because a round counter reached some number.
 
 ## Phase 5: Merge
 
