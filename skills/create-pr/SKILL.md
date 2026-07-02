@@ -112,7 +112,7 @@ When Codex finishes reviewing, it removes the eyes emoji and acts as `chatgpt-co
 
 The polling has two stages:
 
-1. **Trigger detection** (fast) — Check for the 👀 eyes reaction OR an already-completed review from Codex (covers the case where Codex finishes before the first poll). If neither is seen after 2 polls, the webhook likely didn't fire — recreate the PR to re-trigger (automatically, but only once).
+1. **Trigger detection** (fast) — Check for the 👀 eyes reaction OR an already-completed review from Codex (covers the case where Codex finishes before the first poll). If neither is seen after 2 polls, the automatic on-open trigger was slow or missed — **nudge the bot with an `@codex review` comment first** (lightweight, reliable), and only escalate to recreating the PR if the mention also fails to fire it. See the `CODEX_NOT_TRIGGERED` handler below for the exact order.
 2. **Review completion** (longer) — Once triggered, poll for the actual review results (review comments or thumbs-up).
 
 ### Polling script
@@ -259,17 +259,20 @@ When the background task completes, read its output:
 
 - **`CODEX_REVIEW_FOUND`**: Parse the `---REVIEWS---` and `---COMMENTS---` sections. Proceed to Phase 4.
 - **`CODEX_REVIEW_CLEAN`**: Codex reviewed and found no issues. Tell the user: "Codex reviewed the PR and found no issues." Proceed to Phase 5.
-- **`CODEX_NOT_TRIGGERED`** (first attempt): Codex didn't pick up the PR. Automatically recreate:
+- **`CODEX_NOT_TRIGGERED`** (first attempt): Codex didn't pick up the PR. **Try the lightweight nudge FIRST — do NOT close+reopen yet.** The bot explicitly responds to an `@codex review` comment (per its own "About Codex" footer: reviews are triggered on open, ready-for-review, and the comment `@codex review`). This is faster and less disruptive than recreating the PR, and in practice it reliably fires the webhook when the automatic on-open trigger was just slow or missed:
+  - `gh pr comment {pr_number} --body "@codex review"`
+  - Re-enter Phase 3 with the **same** PR number (re-launch the poll watchdog). The eyes reaction typically appears on the `@codex review` comment within ~30–60s.
+  - **This nudge happens only once.** If it still gets `CODEX_NOT_TRIGGERED` after the mention, escalate to recreating the PR (below).
+- **`CODEX_NOT_TRIGGERED`** (second attempt — the `@codex review` mention also failed): Recreate the PR to re-fire the webhook:
   - `gh pr comment {pr_number} --body "Closing to re-trigger Codex review — eyes reaction not detected."`
   - `gh pr close {pr_number}`
   - Re-run `gh pr create` with same branch/title/body
   - Re-enter Phase 3 with the new PR number
-  - **This auto-retry happens only once.** If the second PR also gets `CODEX_NOT_TRIGGERED`, ask the user what to do:
+  - **This recreate happens only once.** If the recreated PR ALSO gets `CODEX_NOT_TRIGGERED` (even after another `@codex review` mention on it), ask the user what to do:
     1. **Keep waiting** — user can re-invoke later
     2. **Merge as-is** — skip review, proceed to Phase 5
-- **`CODEX_NOT_TRIGGERED`** (second attempt): Do NOT auto-recreate. Ask the user:
-  1. **Keep waiting** — user can re-invoke later
-  2. **Merge as-is** — skip review, proceed to Phase 5
+
+> **Note:** an `@codex review` comment also works to trigger a *fresh* review at any time (e.g. the bot was slow on the initial open, or you want it to re-look after a push) — reach for it before close+reopen whenever the bot is simply idle rather than broken.
 - **`CODEX_REVIEW_TIMEOUT`**: Codex picked up the PR but didn't finish reviewing. Present options:
   1. **Keep waiting** — user can re-invoke later
   2. **Merge as-is** — skip review, proceed to Phase 5
