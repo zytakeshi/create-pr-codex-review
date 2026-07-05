@@ -6,7 +6,7 @@
 
 A Claude Code skill that automates the full pull request lifecycle with **OpenAI Codex** as your AI code reviewer.
 
-One command: commit, push, create PR, wait for Codex review, fix issues, merge.
+One command: version bump when needed, commit, push, create PR, wait for Codex review, fix issues, merge.
 
 ## Install
 
@@ -28,6 +28,8 @@ In Claude Code:
 /create-pr                          # commit, push, create PR, wait for review
 /create-pr and merge                # same + auto-merge after review passes
 /create-pr fix: update auth service # with a custom commit hint
+/create-pr bump minor               # force a minor version bump
+/create-pr no version bump          # skip the automatic version bump
 ```
 
 ## Prerequisites
@@ -46,6 +48,7 @@ sequenceDiagram
     participant Codex as Codex
 
     You->>Claude: /create-pr
+    Claude->>Claude: detect or bump version
     Claude->>GH: git commit + push
     Claude->>GH: gh pr create
     GH->>Codex: webhook trigger
@@ -80,6 +83,7 @@ flowchart TD
     A["Phase 1: Prepare Commit
     git status / diff
     analyze changes
+    detect or bump version
     generate commit message
     git add + commit"] --> B
 
@@ -90,10 +94,12 @@ flowchart TD
 
     C["Phase 3: Wait for Review
     ⏳ background, non-blocking
-    Poll every 60s:
-    • inline comments
-    • PR reviews
-    • CI check runs
+    Trigger check after 60s:
+    • eyes reaction or HEAD review
+    • nudge with @codex review if missed
+    Then poll every 30s:
+    • inline comments / PR reviews
+    • thumbs-up clean signal
     Timeout: about 30 min after trigger"] --> D
 
     D["Phase 4: Assess + Fix"] --> E{Agree with comment?}
@@ -134,6 +140,9 @@ A: Any GitHub repo you have push access to.
 
 **Q: Can I customize the commit message style?**
 A: Yes — the skill analyzes your recent `git log` and follows your existing conventions.
+
+**Q: Does it always change my version file?**
+A: It bumps the first supported root version file only when the PR does not already contain a bump. Use `no version bump` to skip it.
 
 ## License
 

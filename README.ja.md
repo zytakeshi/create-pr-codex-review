@@ -6,7 +6,7 @@
 
 **OpenAI Codex** をAIコードレビュアーとして活用し、PRライフサイクルを完全自動化する Claude Code スキルです。
 
-1コマンドで: コミット、プッシュ、PR作成、Codexレビュー待機、修正、マージ。
+1コマンドで: 必要に応じたバージョン更新、コミット、プッシュ、PR作成、Codexレビュー待機、修正、マージ。
 
 ## インストール
 
@@ -28,6 +28,8 @@ Claude Code で入力:
 /create-pr                          # コミット、プッシュ、PR作成、レビュー待機
 /create-pr and merge                # 同上 + レビュー通過後に自動マージ
 /create-pr fix: update auth service # カスタムコミットメッセージ付き
+/create-pr bump minor               # minor バージョン更新を強制
+/create-pr no version bump          # 自動バージョン更新をスキップ
 ```
 
 ## 前提条件
@@ -46,6 +48,7 @@ sequenceDiagram
     participant Codex as Codex
 
     You->>Claude: /create-pr
+    Claude->>Claude: バージョンを検出または更新
     Claude->>GH: git commit + push
     Claude->>GH: gh pr create
     GH->>Codex: webhook トリガー
@@ -80,6 +83,7 @@ flowchart TD
     A["Phase 1: コミット準備
     git status / diff
     変更内容を分析
+    バージョンを検出または更新
     コミットメッセージ生成
     git add + commit"] --> B
 
@@ -90,10 +94,12 @@ flowchart TD
 
     C["Phase 3: レビュー待機
     ⏳ バックグラウンド・非ブロック
-    60秒ごとにポーリング:
-    • インラインコメント
-    • PR レビュー
-    • CI チェック
+    60秒後にトリガー確認:
+    • eyes リアクションまたは HEAD レビュー
+    • 未起動なら @codex review で先に促す
+    その後30秒ごとにポーリング:
+    • インラインコメント / PR レビュー
+    • thumbs-up のクリーン判定
     タイムアウト: トリガー後約30分"] --> D
 
     D["Phase 4: 評価 + 修正"] --> E{コメントに同意？}
@@ -134,6 +140,9 @@ A: push 権限のある任意の GitHub リポジトリで使えます。
 
 **Q: コミットメッセージのスタイルをカスタマイズできますか？**
 A: はい。スキルは `git log` を分析して既存の規約に従います。
+
+**Q: 必ずバージョンファイルを変更しますか？**
+A: いいえ。PR にまだバージョン更新が含まれていない場合だけ、ルートにある最初の対応バージョンファイルを更新します。`no version bump` でスキップできます。
 
 ## ライセンス
 

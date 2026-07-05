@@ -6,7 +6,7 @@
 
 一个 Claude Code 技能，利用 **OpenAI Codex** 作为 AI 代码审查员，自动化完整的 PR 生命周期。
 
-一条命令搞定：提交、推送、创建 PR、等待 Codex 审查、修复问题、合并。
+一条命令搞定：按需版本号递增、提交、推送、创建 PR、等待 Codex 审查、修复问题、合并。
 
 ## 安装
 
@@ -28,6 +28,8 @@ npx skills add zytakeshi/create-pr-codex-review -g
 /create-pr                          # 提交、推送、创建 PR、等待审查
 /create-pr and merge                # 同上 + 审查通过后自动合并
 /create-pr fix: update auth service # 附带自定义提交信息
+/create-pr bump minor               # 强制 minor 版本号递增
+/create-pr no version bump          # 跳过自动版本号递增
 ```
 
 ## 前提条件
@@ -46,6 +48,7 @@ sequenceDiagram
     participant Codex as Codex
 
     You->>Claude: /create-pr
+    Claude->>Claude: 检测或递增版本号
     Claude->>GH: git commit + push
     Claude->>GH: gh pr create
     GH->>Codex: webhook 触发
@@ -80,6 +83,7 @@ flowchart TD
     A["Phase 1: 准备提交
     git status / diff
     分析改动内容
+    检测或递增版本号
     生成 commit message
     git add + commit"] --> B
 
@@ -90,10 +94,12 @@ flowchart TD
 
     C["Phase 3: 等待审查
     ⏳ 后台运行，不阻塞你
-    每 60 秒轮询:
-    • 行内评论
-    • PR 审查意见
-    • CI 检查结果
+    60 秒后检查触发状态:
+    • eyes 反应或 HEAD 审查
+    • 未触发时先用 @codex review 轻量唤起
+    然后每 30 秒轮询:
+    • 行内评论 / PR 审查意见
+    • thumbs-up 通过信号
     超时: 触发后约 30 分钟"] --> D
 
     D["Phase 4: 评估 + 修复"] --> E{同意评论？}
@@ -134,6 +140,9 @@ A: 任何你有 push 权限的 GitHub 仓库。
 
 **Q: 可以自定义 commit message 风格吗？**
 A: 可以。技能会分析 `git log`，自动遵循你现有的提交规范。
+
+**Q: 一定会修改版本文件吗？**
+A: 不会。只有当 PR 里尚未包含版本号递增时，才会递增根目录下第一个受支持的版本文件。可用 `no version bump` 跳过。
 
 ## 许可证
 
