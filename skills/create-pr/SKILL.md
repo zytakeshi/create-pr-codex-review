@@ -95,8 +95,6 @@ EOF
 
 ## Phase 3: Monitor for Codex Review
 
-> **Note (March 31, 2026):** Codex Code Review now counts toward regular Codex usage limits instead of having a separate allowance. Heavy usage may cause users to hit their overall Codex limit sooner.
-
 This is the critical automation step. After creating the PR, poll GitHub API for review activity from the Codex bot (`chatgpt-codex-connector[bot]`).
 
 ### How Codex reviews appear on GitHub
@@ -122,13 +120,15 @@ Before running the polling script, capture the HEAD commit full SHA:
 HEAD_SHA=$(gh api repos/{owner}/{repo}/pulls/{pr_number} --jq '.head.sha')
 ```
 
-**Delegate this poll to a Sonnet 5 watchdog sub-agent.** Waiting on the Codex bot is long-running babysitting with an easy-to-verify result — pure execution, so run it on **Sonnet 5** (never Haiku) and keep its polling noise out of your (the caller's) context.
+**Run the poll as a deterministic background Bash job — never an LLM watchdog.** Waiting on the Codex bot is pure rules (poll, match, report), so it is a script's job: no Sonnet/Haiku/any-tier sub-agent, per the global "No LLM watchdog/monitor" rule. Run the polling script below directly with the `Bash` tool and `run_in_background: true` — the harness re-invokes you when the script exits with the terminal token, the user stays unblocked, and the polling noise never enters context (read only the tail of the output file for the verdict).
 
-**Never monitor the review by self-polling from the main agent** — do NOT use ScheduleWakeup, the `/loop` skill, or a sleep/wakeup tick loop in the caller to poll for the bot's verdict. The main agent must stay free for the user. Instead delegate a **blocking** Sonnet 5 watchdog sub-agent (`Agent` tool, `model: "sonnet"`, `subagent_type: "general-purpose"`) that runs the poll in the foreground and does not return until the review verdict lands (a HEAD-scoped review, a +1, or the window cap). Give it a generous window (poll every ~30s for up to ~15-20 minutes). The `Agent` call blocks without burning caller tokens, and you receive only the final outcome.
+**Never self-poll from the main loop either** — do NOT use ScheduleWakeup, the `/loop` skill, or sleep-tick loops to check on the bot. The background job IS the monitor; you do nothing until its completion notification arrives.
 
-Spawn one sub-agent via the `Agent` tool — `model: "sonnet"`, `subagent_type: "general-purpose"` — with a self-contained prompt carrying the polling script below, the `{owner}`/`{repo}`/`{pr_number}` and `HEAD_SHA`, and this contract: *"Run the script with `run_in_background: true`, watch it to completion, and return ONLY the final outcome token (`CODEX_REVIEW_FOUND` / `CODEX_REVIEW_CLEAN` / `CODEX_REVIEW_TIMEOUT` / `CODEX_NOT_TRIGGERED`) plus the raw `---REVIEWS---`/`---COMMENTS---` payload. Do NOT recreate the PR, reply, fix, or merge anything — you only observe and report."* You (the caller) then handle the result + Phase 4: recreating the PR on `CODEX_NOT_TRIGGERED` (re-delegating a fresh watchdog afterward) and verifying/fixing findings are judgment + outward actions that stay on Opus. **Keep the wait bounded, but let the watchdog block for the full window.** The watchdog waits out the full poll window (~15-20 minutes — the script's built-in Stage-1/Stage-2 caps) before returning; it does not return early just because time is passing, and the caller must never bridge windows itself with a ScheduleWakeup or `/loop` tick. If the window elapses with no verdict, the watchdog returns `CODEX_REVIEW_TIMEOUT` (or `CODEX_NOT_TRIGGERED`), and *you* (the caller) decide what's next — recreate the PR, **re-delegate a fresh blocking watchdog for another window** (never a self-poll), or ask the user — so user-interruptible, caller-owned decisions (pause / merge / recreate) are never trapped inside a long sub-agent run. If the harness can't spawn agents (or you're already a sub-agent), run the poll inline.
+Practical notes:
+- The script is idempotent and re-entrant — Stage 1's fast-path detects an already-completed review on re-entry. If the background job is killed or times out without printing a terminal token (`CODEX_REVIEW_FOUND` / `CODEX_REVIEW_CLEAN` / `CODEX_REVIEW_TIMEOUT` / `CODEX_NOT_TRIGGERED`), just relaunch it the same way.
+- Handling the verdict — recreating the PR on `CODEX_NOT_TRIGGERED`, verifying/fixing findings — is judgment that stays with you (the caller, on your normal model); the background job only observes and reports.
 
-The watchdog (or, in inline mode, you) runs this with `run_in_background: true` so the user isn't blocked:
+Launch it like this:
 
 ```bash
 CODEX_BOT="chatgpt-codex-connector[bot]"
@@ -265,13 +265,13 @@ When the background task completes, read its output:
 - **`CODEX_REVIEW_CLEAN`**: Codex reviewed and found no issues. Tell the user: "Codex reviewed the PR and found no issues." Proceed to Phase 5.
 - **`CODEX_NOT_TRIGGERED`** (first attempt): Codex didn't pick up the PR. **Try the lightweight nudge FIRST — do NOT close+reopen yet.** The bot explicitly responds to an `@codex review` comment (per its own "About Codex" footer: reviews are triggered on open, ready-for-review, and the comment `@codex review`). This is faster and less disruptive than recreating the PR, and in practice it reliably fires the webhook when the automatic on-open trigger was just slow or missed:
   - `gh pr comment {pr_number} --body "@codex review"`
-  - Re-enter Phase 3 with the **same** PR number (re-launch the poll watchdog). The eyes reaction typically appears on the `@codex review` comment within ~30–60s. Re-delegate a fresh blocking Sonnet watchdog — never a ScheduleWakeup/loop tick.
+  - Re-enter Phase 3 with the **same** PR number (re-launch the poll watchdog). The eyes reaction typically appears on the `@codex review` comment within ~30–60s. Relaunch the background polling job (Bash `run_in_background`) — never an LLM watchdog sub-agent or a ScheduleWakeup/loop tick.
   - **This nudge happens only once.** If it still gets `CODEX_NOT_TRIGGERED` after the mention, escalate to recreating the PR (below).
 - **`CODEX_NOT_TRIGGERED`** (second attempt — the `@codex review` mention also failed): Recreate the PR to re-fire the webhook:
   - `gh pr comment {pr_number} --body "Closing to re-trigger Codex review — eyes reaction not detected."`
   - `gh pr close {pr_number}`
   - Re-run `gh pr create` with same branch/title/body
-  - Re-enter Phase 3 with the new PR number. Re-delegate a fresh blocking Sonnet watchdog — never a ScheduleWakeup/loop tick.
+  - Re-enter Phase 3 with the new PR number. Relaunch the background polling job (Bash `run_in_background`) — never an LLM watchdog sub-agent or a ScheduleWakeup/loop tick.
   - **This recreate happens only once.** If the recreated PR ALSO gets `CODEX_NOT_TRIGGERED` (even after another `@codex review` mention on it), ask the user what to do:
     1. **Keep waiting** — user can re-invoke later
     2. **Merge as-is** — skip review, proceed to Phase 5
@@ -296,7 +296,7 @@ When comments arrive:
        --method POST -f body="<your reasoning for disagreeing>"
      ```
      This lets Codex see your counterargument in the next review round and either accept it or push back.
-   - **Partially agree** (the concern is valid but the suggested fix isn't ideal): Reply to the comment explaining why you're taking a different approach, then implement your better alternative.
+   - **Partially agree** (the concern is valid but the suggested fix isn't ideal): Reply to the comment explaining why you're taking a different approach, then implement your better alternative. If the alternative widens scope, changes architecture/public API, or adds an abstraction, stop and ask; do not implement it silently.
 3. After processing all comments (fixes + reply-comments):
    - If any code was changed: run the project's lint/analyze command to verify no regressions, stage only the changed files, create a NEW commit (never amend):
      ```
@@ -312,7 +312,7 @@ When comments arrive:
      All findings disputed — see PR comment replies for reasoning.
      ```
    - Push to the same branch.
-4. **Loop back to Phase 3** — re-capture the new HEAD SHA and re-enter the polling script to wait for Codex to review the new commit (and read your reply comments). Re-delegate a fresh blocking Sonnet watchdog — never a ScheduleWakeup/loop tick. Tell the user:
+4. **Loop back to Phase 3** — re-capture the new HEAD SHA and re-enter the polling script to wait for Codex to review the new commit (and read your reply comments). Relaunch the background polling job (Bash `run_in_background`) — never an LLM watchdog sub-agent or a ScheduleWakeup/loop tick. Tell the user:
    > "Round N complete. Waiting for Codex to re-review…"
 5. When Phase 3 returns a result for the new commit:
    - **`CODEX_REVIEW_FOUND`**: Start the next round — go to step 1 of this phase.
@@ -369,3 +369,7 @@ After Codex gives a clean review (or user elects to merge):
 /create-pr bump minor
 /create-pr no version bump
 ```
+
+## VilaVPN tracking (vilaops)
+For VilaVPN-family repos, the PR body MUST carry the Tracking contract: `Tracking-Issue: owner/repo#N` + `Tracking-Mode: gated|gate-none`, or `Tracking-Exempt: single-session single-repo no-verify-tail`. Gated issues: `Refs owner/repo#N` only — never Fixes/Closes/Resolves in title, body, or commits. See global CLAUDE.md §VilaVPN Ops Center.
+After the merge lands, fire a targeted board poll: `gh workflow run poll.yml --repo zytakeshi/vilavpn-ops -f force=true -f spoke=<repo-name>`.
