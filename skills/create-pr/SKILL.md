@@ -1,9 +1,8 @@
 ---
 name: create-pr
 description: |
-  Create a PR from uncommitted changes, then monitor for Codex review comments, verify and fix issues, and merge.
-  Triggers: "create pr", "create a pr", "make a pr", "open pr", "submit pr", "push and create pr", "pr for these changes"
-  This skill should be used proactively whenever the user asks to create a pull request. It handles the full lifecycle: auto-bump version (if not already bumped), commit, push, create PR, wait for Codex review, address feedback, and merge.
+  Carry local changes through a full pull-request lifecycle: version bump if the PR lacks one, commit, push, open the PR, wait for the Codex GitHub bot's review, verify and fix or dispute its findings, and merge on confirmation.
+  Use proactively whenever the user asks to create, open, or submit a pull request.
 ---
 
 You are automating the full pull request lifecycle. Follow each phase in order.
@@ -120,13 +119,13 @@ Before running the polling script, capture the HEAD commit full SHA:
 HEAD_SHA=$(gh api repos/{owner}/{repo}/pulls/{pr_number} --jq '.head.sha')
 ```
 
-**Run the poll as a deterministic background Bash job — never an LLM watchdog.** Waiting on the Codex bot is pure rules (poll, match, report), so it is a script's job: no Sonnet/Haiku/any-tier sub-agent, per the global "No LLM watchdog/monitor" rule. Run the polling script below directly with the `Bash` tool and `run_in_background: true` — the harness re-invokes you when the script exits with the terminal token, the user stays unblocked, and the polling noise never enters context (read only the tail of the output file for the verdict).
+**Run the poll as a deterministic background Bash job, not a sub-agent.** Waiting on the Codex bot is pure rules (poll, match, report), so a script does it. Run the polling script below directly with the `Bash` tool and `run_in_background: true` — the harness re-invokes you when the script exits with the terminal token, the user stays unblocked, and the polling noise never enters context (read only the tail of the output file for the verdict).
 
 **Never self-poll from the main loop either** — do NOT use ScheduleWakeup, the `/loop` skill, or sleep-tick loops to check on the bot. The background job IS the monitor; you do nothing until its completion notification arrives.
 
 Practical notes:
 - The script is idempotent and re-entrant — Stage 1's fast-path detects an already-completed review on re-entry. If the background job is killed or times out without printing a terminal token (`CODEX_REVIEW_FOUND` / `CODEX_REVIEW_CLEAN` / `CODEX_REVIEW_TIMEOUT` / `CODEX_NOT_TRIGGERED`), just relaunch it the same way.
-- Handling the verdict — recreating the PR on `CODEX_NOT_TRIGGERED`, verifying/fixing findings — is judgment that stays with you (the caller, on your normal model); the background job only observes and reports.
+- Handling the verdict — nudging or recreating the PR on `CODEX_NOT_TRIGGERED`, verifying/fixing findings — is your judgment; the background job only observes and reports.
 
 Launch it like this:
 
@@ -265,13 +264,13 @@ When the background task completes, read its output:
 - **`CODEX_REVIEW_CLEAN`**: Codex reviewed and found no issues. Tell the user: "Codex reviewed the PR and found no issues." Proceed to Phase 5.
 - **`CODEX_NOT_TRIGGERED`** (first attempt): Codex didn't pick up the PR. **Try the lightweight nudge FIRST — do NOT close+reopen yet.** The bot explicitly responds to an `@codex review` comment (per its own "About Codex" footer: reviews are triggered on open, ready-for-review, and the comment `@codex review`). This is faster and less disruptive than recreating the PR, and in practice it reliably fires the webhook when the automatic on-open trigger was just slow or missed:
   - `gh pr comment {pr_number} --body "@codex review"`
-  - Re-enter Phase 3 with the **same** PR number (re-launch the poll watchdog). The eyes reaction typically appears on the `@codex review` comment within ~30–60s. Relaunch the background polling job (Bash `run_in_background`) — never an LLM watchdog sub-agent or a ScheduleWakeup/loop tick.
+  - Re-enter Phase 3 with the **same** PR number and relaunch the background polling job. The eyes reaction typically appears on the `@codex review` comment within ~30–60s.
   - **This nudge happens only once.** If it still gets `CODEX_NOT_TRIGGERED` after the mention, escalate to recreating the PR (below).
 - **`CODEX_NOT_TRIGGERED`** (second attempt — the `@codex review` mention also failed): Recreate the PR to re-fire the webhook:
   - `gh pr comment {pr_number} --body "Closing to re-trigger Codex review — eyes reaction not detected."`
   - `gh pr close {pr_number}`
   - Re-run `gh pr create` with same branch/title/body
-  - Re-enter Phase 3 with the new PR number. Relaunch the background polling job (Bash `run_in_background`) — never an LLM watchdog sub-agent or a ScheduleWakeup/loop tick.
+  - Re-enter Phase 3 with the new PR number and relaunch the background polling job.
   - **This recreate happens only once.** If the recreated PR ALSO gets `CODEX_NOT_TRIGGERED` (even after another `@codex review` mention on it), ask the user what to do:
     1. **Keep waiting** — user can re-invoke later
     2. **Merge as-is** — skip review, proceed to Phase 5
@@ -312,7 +311,7 @@ When comments arrive:
      All findings disputed — see PR comment replies for reasoning.
      ```
    - Push to the same branch.
-4. **Loop back to Phase 3** — re-capture the new HEAD SHA and re-enter the polling script to wait for Codex to review the new commit (and read your reply comments). Relaunch the background polling job (Bash `run_in_background`) — never an LLM watchdog sub-agent or a ScheduleWakeup/loop tick. Tell the user:
+4. **Loop back to Phase 3** — re-capture the new HEAD SHA and relaunch the background polling job to wait for Codex to review the new commit (and read your reply comments). Tell the user:
    > "Round N complete. Waiting for Codex to re-review…"
 5. When Phase 3 returns a result for the new commit:
    - **`CODEX_REVIEW_FOUND`**: Start the next round — go to step 1 of this phase.
@@ -372,4 +371,4 @@ After Codex gives a clean review (or user elects to merge):
 
 ## VilaVPN tracking (vilaops)
 For VilaVPN-family repos, the PR body MUST carry the Tracking contract: `Tracking-Issue: owner/repo#N` + `Tracking-Mode: gated|gate-none`, or `Tracking-Exempt: single-session single-repo no-verify-tail`. Gated issues: `Refs owner/repo#N` only — never Fixes/Closes/Resolves in title, body, or commits. See global CLAUDE.md §VilaVPN Ops Center.
-After the merge lands, fire a targeted board poll: `gh workflow run poll.yml --repo zytakeshi/vilavpn-ops -f force=true -f spoke=<repo-name>`.
+After the merge lands, fire the targeted board poll exactly as the `vilaops-board` skill specifies: it checks `VILAOPS_ARMED` first (`-f force=true` bypasses that gate, so nothing is dispatched while the engine is disarmed) and confirms the run afterwards.
