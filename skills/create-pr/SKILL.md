@@ -22,6 +22,7 @@ $ARGUMENTS
 2. Analyze all changes and draft a commit message:
    - Summarize the nature (feature, fix, refactor, etc.)
    - Keep it concise (1-2 sentence summary line, optional bullet details)
+   - End with one `Verified: <how>` trailer above any `Co-Authored-By` lines (`e2e <surface>`, `staging`, `unit` or `none`; `none` is valid, never omit the line). Take the value from the repo's `verify` skill report when one ran.
    - Do NOT commit `.env`, credentials, or secrets — warn the user if found
 
 3. **Auto-bump the version (if not already bumped).** Every PR should carry a version bump unless one is already present in the changes. Detect → decide → bump:
@@ -321,9 +322,9 @@ When comments arrive:
 **No fixed iteration cap.** Keep looping as long as each round produces real fixes that aren't being re-flagged. The loop exits on *convergence*, not a round count:
 
 - **Clean review** — Codex returns `CODEX_REVIEW_CLEAN`. Proceed to Phase 5.
-- **Stable impasse** — every remaining finding is one you already disputed on a prior round with reasoning, and Codex is repeating itself verbatim. Track disputed findings across rounds so you can detect this. Report the impasse and ask the user.
-- **No progress** — a round produced no agreed fixes and no new valid findings (only re-flags of disputed items). Stop and ask.
-- **Diminishing returns** — the only remaining findings are low-value (style, micro-optimization, speculative refactors) and further iteration isn't justified. Say so explicitly in the final report rather than silently deciding, then ask the user.
+- **Stable impasse** — every remaining finding is one you already disputed on a prior round with reasoning, and Codex is repeating itself verbatim. Track disputed findings across rounds so you can detect this. Consult, then decide: put the disputed findings and your reasons to one fresh reviewer with no loop history (a fresh Opus reviewer at high, or Cursor for a simple change). It sides with you → proceed to Phase 5 and record each dispute with its reason in the PR. It sides with Codex → fix and run one more round. Ask the user only when the dispute touches money, auth, prod state or a public release.
+- **No progress** — a round produced no agreed fixes and no new valid findings (only re-flags of disputed items). Treat it as a stable impasse: consult, then decide, as above.
+- **Diminishing returns** — the only remaining findings are low-value (style, micro-optimization, speculative refactors) and further iteration isn't justified. Say so explicitly in the final report and proceed to Phase 5; list the findings you left as nits.
 
 When you hit a non-clean exit condition, surface it with the round number and the outstanding findings, and ask how to proceed (keep going, merge as-is, or abandon) — but never stop solely because a round counter reached some number.
 
