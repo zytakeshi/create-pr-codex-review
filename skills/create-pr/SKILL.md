@@ -22,6 +22,7 @@ $ARGUMENTS
 2. Analyze all changes and draft a commit message:
    - Summarize the nature (feature, fix, refactor, etc.)
    - Keep it concise (1-2 sentence summary line, optional bullet details)
+   - End with one `Verified: <how>` trailer above any `Co-Authored-By` lines (`e2e <surface>`, `staging`, `unit` or `none`; `none` is valid, never omit the line). Take the value from the repo's `verify` skill report when one ran.
    - Do NOT commit `.env`, credentials, or secrets — warn the user if found
 
 3. **Auto-bump the version (if not already bumped).** Every PR should carry a version bump unless one is already present in the changes. Detect → decide → bump:
@@ -331,8 +332,8 @@ When you hit a non-clean exit condition, surface it with the round number and th
 
 After Codex gives a clean review (or user elects to merge):
 
-1. Confirm with the user: "Codex is satisfied (or: user chose to merge). Merge now?"
-2. If user confirms (or if the original request included "and merge"):
+1. Decide whether to ask. **Merge without asking** when ALL of these hold: the review is `CODEX_REVIEW_CLEAN` (or the user chose to merge), every required CI check on the PR is green, and the repo belongs to a family the operator has delegated merges for (configured in the operator's own rules — e.g. a client-app / edge-client / node-agent family where "build, merge, internal test" are already the agent's). Otherwise confirm with the user: "Codex is satisfied (or: user chose to merge). Merge now?"
+2. If merging without asking, if the user confirms, or if the original request included "and merge":
    ```bash
    gh pr merge {pr_number} --squash
    ```
@@ -350,7 +351,7 @@ After Codex gives a clean review (or user elects to merge):
 
 - Always use `git remote -v` to verify the correct remote before pushing.
 - Never force-push or amend commits.
-- Never auto-merge without user confirmation unless they explicitly asked for it in the original request.
+- Never auto-merge without user confirmation unless they explicitly asked for it in the original request **or** the repo is in a merge-delegated family and the Phase 5 conditions (clean review + green CI) hold. A public release is never a merge: release steps always stay with the user.
 - If Codex review times out, follow the timeout handler in Phase 3.
 - If the PR has merge conflicts, notify the user rather than resolving automatically.
 - Extract {owner}/{repo} from `git remote -v` output, don't hardcode.
